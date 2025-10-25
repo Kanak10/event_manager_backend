@@ -37,8 +37,8 @@ async def log_response_time(request: Request, call_next):
     logger.info(f"Request: {request.url.path} completed in {process_time:.4f} seconds")
     return response
 
-app.include_router(chatbot.router)
 app.include_router(authentication.router)
+app.include_router(chatbot.router)
 
 if __name__ == "__main__":
     import uvicorn

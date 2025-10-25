@@ -10,6 +10,9 @@ import uuid
 import traceback
 import logging as logger
 import requests
+from db_utils.database import get_connection
+from queries.user_queries.user_queries import UserQueries
+from psycopg2 import Error
 
 load_dotenv(override=True)
 
@@ -17,7 +20,6 @@ router = APIRouter()
 
 # Setup OAuth2
 oauth = OAuth()
-
 oauth.register(
     name="auth_demo",
     client_id=os.getenv("GOOGLE_CLIENT_ID"),
@@ -33,14 +35,12 @@ oauth.register(
     client_kwargs={"scope": "openid profile email"},
 )
 
-
 # Secret key used to encode JWT tokens (should be kept secret)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
 REDIRECT_URL = os.getenv("REDIRECT_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
-print(f"REDIRECT_URL:: {REDIRECT_URL}")
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     if expires_delta:
@@ -53,34 +53,30 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 @router.get("/login")
 async def login(request: Request):
-    print(f"requiest: {request}")
     request.session.clear()
     referer = request.headers.get("referer") # It tells you which page or URL triggered the request (useful for redirecting users back after login).
     FRONTEND_URL = os.getenv("FRONTEND_URL")
     redirect_url = os.getenv("REDIRECT_URL")
-    print(f"redirect_url:: {redirect_url}")
     request.session["login_redirect"] = FRONTEND_URL 
     # This line saves the frontend URL (where the user should go after login) into the session, so it can be retrieved later after Google authentication completes.
 
     return await oauth.auth_demo.authorize_redirect(request, redirect_url, prompt="consent")
 
+@router.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    response = JSONResponse(content={"message": "Logged out successfully."})
+    response.delete_cookie("token")
+    return response
 
 @router.route("/auth")
 async def auth(request: Request):
     state_in_request = request.query_params.get("state")
 
-    logger.info(f"Request Session: {request.session}")
-    print(f"Request Session: {request.session}")
-    logger.info(f"Request state (from query params): {state_in_request}")
-    print(f"Request state (from query params): {state_in_request}")
-
-    print(f"Request: {request}")
-
     try:
         token = await oauth.auth_demo.authorize_access_token(request)
     except Exception as e:
-        # logger.info(str(e))
-        print(f"errror: {e}")
+        logger.info(str(e))
         raise HTTPException(status_code=401, detail="Google authentication failed.")
 
     try:
@@ -88,9 +84,8 @@ async def auth(request: Request):
         headers = {"Authorization": f'Bearer {token["access_token"]}'} # Prepares the Authorization header with the access token you got from Google so the API knows who’s asking.
         google_response = requests.get(user_info_endpoint, headers=headers) # Makes a GET request to Google’s API to retrieve the user’s profile data.
         user_info = google_response.json()
-        print(f"user_info: {user_info}")
     except Exception as e:
-        # logger.info(str(e))
+        logger.info(str(e))
         raise HTTPException(status_code=401, detail="Google authentication failed.")
 
     user = token.get("userinfo")
@@ -101,17 +96,9 @@ async def auth(request: Request):
     first_logged_in = datetime.now()
     last_accessed = datetime.now()
 
-    print(f"user: {user}")
-    print(f"expires_in: {expires_in}")
-    print(f"user_id: {user_id}")
-    print(f"iss: {iss}")
-    print(f"user_email: {user_email}")
-    print(f"first_logged_in: {first_logged_in}")
-    print(f"last_accessed: {last_accessed}")
-
     user_name = user_info.get("name")
     user_pic = user_info.get("picture")
-    print(f"user_name: {user_name}")
+
     logger.info(f"User name:{user_name}")
     logger.info(f"User Email:{user_email}")
 
@@ -126,13 +113,12 @@ async def auth(request: Request):
     access_token = create_access_token(data={"sub": user_id, "email": user_email}, expires_delta=access_token_expires)
 
     session_id = str(uuid.uuid4())
-    # log_user(user_id, user_email, user_name, user_pic, first_logged_in, last_accessed)
+    log_user(user_id, user_email, user_name, user_pic, first_logged_in, last_accessed)
     # log_token(access_token, user_email, session_id)
 
     redirect_url = request.session.pop("login_redirect", FRONTEND_URL)
     # logger.info(f"Redirecting to: {redirect_url}")
     response = RedirectResponse(redirect_url)
-    print(f"Access Token: {access_token}")
     response.set_cookie(
         key="token",
         value=access_token,
@@ -141,34 +127,32 @@ async def auth(request: Request):
         samesite="strict",  # Set the SameSite attribute to None
     )
 
-    
-
-    print(f"response:: {response}")
     return response
 
-# def log_user(user_id, user_email, user_name, user_pic, first_logged_in, last_accessed):
-#     try:
-#         connection = mysql.connector.connect(host=host, database=database, user=user, password=password)
+def log_user(user_id, user_email, user_name, user_pic, first_logged_in, last_accessed):
+    try:
+        conn = get_connection()
+        if conn.closed == 0:
+            cur = conn.cursor()
 
-#         if connection.is_connected():
-#             cursor = connection.cursor()
-#             sql_query = """SELECT COUNT(*) from users WHERE email_id = %s"""
-#             cursor.execute(sql_query, (user_email,))
-#             row_count = cursor.fetchone()[0]
+            # Create table if not exists
+            cur.execute(UserQueries.create_user_table)
 
-#             if row_count == 0:
-#                 sql_query = """INSERT INTO users (user_id, email_id,user_name,user_pic,first_logged_in, last_accessed) VALUES (%s, %s, %s, %s, %s, %s)"""
-#                 cursor.execute(sql_query, (user_id, user_email, user_name, user_pic, first_logged_in, last_accessed))
+            # Check if products exist
+            cur.execute(UserQueries.select_all_user, (user_email,))
+            row = cur.fetchone()
+            row_count = row['count'] if row else 0
 
-#             # Commit changes
-#             connection.commit()
-
-#     except Error as e:
-#         print("Error while connecting to MySQL", e)
-#     finally:
-#         if connection.is_connected():
-#             cursor.close()
-#             connection.close()
+            if row_count == 0:
+                cur.execute(UserQueries.insert_user, (user_id, user_email, user_name, user_pic, first_logged_in, last_accessed))
+                
+            conn.commit()
+    except Error as e:
+        raise HTTPException(status_code=500, detail="Server Internal Error")
+    finally:
+        if conn.closed == 0:
+            cur.close()
+            conn.close()
 
 # def log_token(access_token, user_email, session_id):
 #     try:
@@ -193,16 +177,7 @@ async def auth(request: Request):
 #             connection.close()
 #             logger.info("MySQL connection is closed")
 
-
-@router.get("/logout")
-async def logout(request: Request):
-    request.session.clear()
-    response = JSONResponse(content={"message": "Logged out successfully."})
-    response.delete_cookie("token")
-    return response
-
 def get_current_user(authorization: str = Header(None)):
-    print(f"token: {authorization}")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
