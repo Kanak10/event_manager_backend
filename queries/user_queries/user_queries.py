@@ -39,3 +39,19 @@ class UserQueries:
         SET updated_at = %s
         WHERE user_email = %s;
     """
+
+    fetch_user_for_signin = """
+        SELECT google_id,
+                user_email,
+                user_name,
+                user_pic,
+                hashed_password,
+                auth_provider,
+                created_at,
+                updated_at
+        from users WHERE user_email = %s
+    """
+
+    fetch_user_details = """
+
+    """

@@ -1,7 +1,6 @@
 from fastapi import HTTPException, status, Request, Cookie, APIRouter, Header
 from fastapi.responses import JSONResponse, RedirectResponse
 from authlib.integrations.starlette_client import OAuth
-from starlette.middleware.sessions import SessionMiddleware
 from datetime import datetime, timedelta
 from jose import jwt, ExpiredSignatureError, JWTError
 from dotenv import load_dotenv
@@ -59,18 +58,14 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 @router.get("/login/{auth_provider}")
 async def login(auth_provider: str, request: Request):
-    print(f"auth_provider: {auth_provider}")
-    if auth_provider == "google":
-        request.session.clear()
-        referer = request.headers.get("referer") # It tells you which page or URL triggered the request (useful for redirecting users back after login).
-        FRONTEND_URL = os.getenv("FRONTEND_URL")
-        redirect_url = os.getenv("REDIRECT_URL")
-        request.session["login_redirect"] = FRONTEND_URL 
-        # This line saves the frontend URL (where the user should go after login) into the session, so it can be retrieved later after Google authentication completes.
+    request.session.clear()
+    referer = request.headers.get("referer") # It tells you which page or URL triggered the request (useful for redirecting users back after login).
+    FRONTEND_URL = os.getenv("FRONTEND_URL")
+    redirect_url = os.getenv("REDIRECT_URL")
+    request.session["login_redirect"] = FRONTEND_URL 
+    # This line saves the frontend URL (where the user should go after login) into the session, so it can be retrieved later after Google authentication completes.
 
-        return await oauth.auth_demo.authorize_redirect(request, redirect_url, prompt="consent")
-    # elif auth_provider == "email":
-
+    return await oauth.auth_demo.authorize_redirect(request, redirect_url, prompt="consent")
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -79,7 +74,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 @router.get("/signup")
-def signup(email: str, password: str, user_name: str):
+async def signup(email: str, password: str, user_name: str):
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -123,12 +118,43 @@ def signup(email: str, password: str, user_name: str):
 
         conn.commit()
 
-        return {"message": "User registered successfully."}
+        JSONResponse(content={"message": "User registered successfully."})
     except Error as e:
         raise HTTPException(status_code=500, detail="Database error")
     finally:
         cur.close()
         conn.close()
+
+@router.get("/signin")
+async def signin(email: str, password: str):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(UserQueries.fetch_user_for_signin, (email.strip().lower(),))
+        existing = cur.fetchone()
+
+        if existing and existing['user_email']:
+            user_data = dict(existing)
+            user = UserModel(**user_data)
+            is_correct_password = verify_password(password, user.hashed_password)
+
+            if is_correct_password:
+                return JSONResponse(content={
+                    "google_id": user.google_id,
+                    "user_email": user.user_email,
+                    "user_name": user.user_name,
+                    "user_pic": user.user_pic ,
+                    "auth_provider": user.auth_provider,
+                    "created_at": user.created_at.isoformat(),
+                    "updated_at": user.updated_at.isoformat()
+                })
+            else:
+                return HTTPException(status_code=401, detail="Invalid password")
+        else:
+            return HTTPException(status_code=400, detail="Invalid email")
+    except Error as e:
+        return HTTPException(status_code=500, detail="Database error")
 
 @router.get("/logout")
 async def logout(request: Request):

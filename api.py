@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from starlette.config import Config
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from apis import authentication, chatbot
+from apis import authentication, chatbot, user
 import time
 import logging as logger
 
@@ -37,8 +37,9 @@ async def log_response_time(request: Request, call_next):
     logger.info(f"Request: {request.url.path} completed in {process_time:.4f} seconds")
     return response
 
-app.include_router(authentication.router)
-app.include_router(chatbot.router)
+app.include_router(authentication.router, tags=["Authentication"])
+app.include_router(chatbot.router, tags=["Chatbot"])
+app.include_router(user.router, tags=["User"])
 
 if __name__ == "__main__":
     import uvicorn
