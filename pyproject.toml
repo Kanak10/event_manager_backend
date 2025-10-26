@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
     "mysql-connector-python>=9.0.0",
+    "passlib>=1.7.4",
     "psycopg2-binary>=2.9.10",
     "pyjwt>=2.9.0",
     "python-dotenv>=1.0.1",

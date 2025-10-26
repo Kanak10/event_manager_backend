@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Cookie, APIRouter, Header
+from fastapi import HTTPException, status, Request, Cookie, APIRouter, Header
 from fastapi.responses import JSONResponse, RedirectResponse
 from authlib.integrations.starlette_client import OAuth
 from starlette.middleware.sessions import SessionMiddleware
@@ -12,7 +12,11 @@ import logging as logger
 import requests
 from db_utils.database import get_connection
 from queries.user_queries.user_queries import UserQueries
+from queries.authorization.authorization_queries import AuthorizationQueries
 from psycopg2 import Error
+from models.user_model import UserModel
+from models.authorization_model import IssuedTokens
+from passlib.context import CryptContext
 
 load_dotenv(override=True)
 
@@ -40,6 +44,8 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
 REDIRECT_URL = os.getenv("REDIRECT_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
@@ -51,16 +57,78 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-@router.get("/login")
-async def login(request: Request):
-    request.session.clear()
-    referer = request.headers.get("referer") # It tells you which page or URL triggered the request (useful for redirecting users back after login).
-    FRONTEND_URL = os.getenv("FRONTEND_URL")
-    redirect_url = os.getenv("REDIRECT_URL")
-    request.session["login_redirect"] = FRONTEND_URL 
-    # This line saves the frontend URL (where the user should go after login) into the session, so it can be retrieved later after Google authentication completes.
+@router.get("/login/{auth_provider}")
+async def login(auth_provider: str, request: Request):
+    print(f"auth_provider: {auth_provider}")
+    if auth_provider == "google":
+        request.session.clear()
+        referer = request.headers.get("referer") # It tells you which page or URL triggered the request (useful for redirecting users back after login).
+        FRONTEND_URL = os.getenv("FRONTEND_URL")
+        redirect_url = os.getenv("REDIRECT_URL")
+        request.session["login_redirect"] = FRONTEND_URL 
+        # This line saves the frontend URL (where the user should go after login) into the session, so it can be retrieved later after Google authentication completes.
 
-    return await oauth.auth_demo.authorize_redirect(request, redirect_url, prompt="consent")
+        return await oauth.auth_demo.authorize_redirect(request, redirect_url, prompt="consent")
+    # elif auth_provider == "email":
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+@router.get("/signup")
+def signup(email: str, password: str, user_name: str):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(UserQueries.create_user_table)
+
+        cur.execute(UserQueries.count_user, (email,))
+        existing = cur.fetchone()
+        if existing and existing["count"] > 0:
+            raise HTTPException(status_code=400, detail="Email already registered.")
+        
+
+        cur.execute(UserQueries.find_user_with_user_name, (user_name.lower(),))
+        existing_with_user_name = cur.fetchone()
+        if existing_with_user_name and existing_with_user_name["count"] > 0:
+            raise HTTPException(status_code=400, detail="User name already registered.")
+
+        hashed_pw = hash_password(password)
+        
+        user_model = UserModel(
+            google_id=None,
+            user_email=email.strip().lower(),
+            user_name=user_name.strip().lower(),
+            user_pic=None,
+            hashed_password=hashed_pw,
+            auth_provider="email",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        cur.execute(UserQueries.insert_user, (
+            user_model.google_id,
+            user_model.user_email,
+            user_model.user_name,
+            user_model.user_pic,
+            user_model.hashed_password,
+            user_model.auth_provider,
+            user_model.created_at,
+            user_model.updated_at
+        ))
+
+        conn.commit()
+
+        return {"message": "User registered successfully."}
+    except Error as e:
+        raise HTTPException(status_code=500, detail="Database error")
+    finally:
+        cur.close()
+        conn.close()
 
 @router.get("/logout")
 async def logout(request: Request):
@@ -93,8 +161,8 @@ async def auth(request: Request):
     user_id = user.get("sub")
     iss = user.get("iss")
     user_email = user.get("email")
-    first_logged_in = datetime.now()
-    last_accessed = datetime.now()
+    created_at = datetime.now()
+    updated_at = datetime.now()
 
     user_name = user_info.get("name")
     user_pic = user_info.get("picture")
@@ -113,11 +181,29 @@ async def auth(request: Request):
     access_token = create_access_token(data={"sub": user_id, "email": user_email}, expires_delta=access_token_expires)
 
     session_id = str(uuid.uuid4())
-    log_user(user_id, user_email, user_name, user_pic, first_logged_in, last_accessed)
-    # log_token(access_token, user_email, session_id)
+    is_new_user = log_user(UserModel(
+        google_id=user_id,
+        user_email=user_email.strip().lower(),
+        user_name=user_name.strip().lower(),
+        user_pic=user_pic,
+        auth_provider="google",
+        hashed_pw=None,
+        created_at=created_at,
+        updated_at=updated_at,
+    ))
+    if is_new_user:
+        logger.info(f"New user signed up: {user_email}")
+    else:
+        logger.info(f"Existing user signed in: {user_email}")
+
+    log_token(IssuedTokens(
+        access_token=access_token,
+        user_email=user_email,
+        session_id=session_id
+    ))
 
     redirect_url = request.session.pop("login_redirect", FRONTEND_URL)
-    # logger.info(f"Redirecting to: {redirect_url}")
+    logger.info(f"Redirecting to: {redirect_url}")
     response = RedirectResponse(redirect_url)
     response.set_cookie(
         key="token",
@@ -129,53 +215,67 @@ async def auth(request: Request):
 
     return response
 
-def log_user(user_id, user_email, user_name, user_pic, first_logged_in, last_accessed):
+def log_user(user: UserModel):
     try:
         conn = get_connection()
         if conn.closed == 0:
             cur = conn.cursor()
 
-            # Create table if not exists
             cur.execute(UserQueries.create_user_table)
 
-            # Check if products exist
-            cur.execute(UserQueries.select_all_user, (user_email,))
+            cur.execute(UserQueries.count_user, (user.user_email,))
             row = cur.fetchone()
-            row_count = row['count'] if row else 0
 
-            if row_count == 0:
-                cur.execute(UserQueries.insert_user, (user_id, user_email, user_name, user_pic, first_logged_in, last_accessed))
-                
-            conn.commit()
+            if row and row['count'] > 0:
+                cur.execute(
+                    UserQueries.update_updated_at_column,
+                    (user.updated_at, user.user_email)
+                )
+                conn.commit()
+                return False 
+            else:
+                cur.execute(
+                    UserQueries.insert_user,
+                    (user.user_id, user.google_id, user.user_email, user.user_name,
+                     user.user_pic,  user.hashed_password, user.auth_provider, user.created_at, user.updated_at)
+                )
+                conn.commit()
+                return True
     except Error as e:
-        raise HTTPException(status_code=500, detail="Server Internal Error")
+        logger.error(f"Database operation failed: {e}")
+        raise HTTPException(status_code=500, detail="Database operation failed")    
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
     finally:
         if conn.closed == 0:
             cur.close()
             conn.close()
 
-# def log_token(access_token, user_email, session_id):
-#     try:
-#         connection = mysql.connector.connect(host=host, database=database, user=user, password=password)
+def log_token(issued_token: IssuedTokens):
+    try:
+        conn = get_connection()
 
-#         if connection.is_connected():
-#             cursor = connection.cursor()
+        if conn.closed == 0:
+            cur = conn.cursor()
 
-#             # SQL query to insert data
-#             sql_query = """INSERT INTO issued_tokens (token, email_id, session_id) VALUES (%s,%s,%s)"""
-#             # Execute the SQL query
-#             cursor.execute(sql_query, (access_token, user_email, session_id))
+            cur.execute(AuthorizationQueries.create_issued_token_tabel)
 
-#             # Commit changes
-#             connection.commit()
+            cur.execute(AuthorizationQueries.insert_in_issued_token_tabel, (issued_token.access_token, issued_token.user_email, issued_token.session_id))
 
-#     except Error as e:
-#         print("Error while connecting to MySQL", e)
-#     finally:
-#         if connection.is_connected():
-#             cursor.close()
-#             connection.close()
-#             logger.info("MySQL connection is closed")
+            conn.commit()
+
+    except Error as e:
+        logger.error(f"Database operation failed: {e}")
+        raise HTTPException(status_code=500, detail="Database operation failed")    
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    finally:
+        if conn.closed == 0:
+            cur.close()
+            conn.close()
+            logger.info("Postgres connection is closed")
 
 def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
