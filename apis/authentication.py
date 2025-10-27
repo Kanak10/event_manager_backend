@@ -56,8 +56,8 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-@router.get("/login/{auth_provider}")
-async def login(auth_provider: str, request: Request):
+@router.get("/login/")
+async def login(request: Request):
     request.session.clear()
     referer = request.headers.get("referer") # It tells you which page or URL triggered the request (useful for redirecting users back after login).
     FRONTEND_URL = os.getenv("FRONTEND_URL")
@@ -134,7 +134,7 @@ async def signin(email: str, password: str):
         cur.execute(UserQueries.fetch_user_for_signin, (email.strip().lower(),))
         existing = cur.fetchone()
 
-        if existing and existing['user_email']:
+        if existing and existing['user_emailq']:
             user_data = dict(existing)
             user = UserModel(**user_data)
             is_correct_password = verify_password(password, user.hashed_password)
