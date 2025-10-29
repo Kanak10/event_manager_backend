@@ -1,4 +1,4 @@
-from fastapi import HTTPException, status, Request, Cookie, APIRouter, Header
+from fastapi import HTTPException, status, Request, Cookie, APIRouter, Header, Depends
 from fastapi.responses import JSONResponse, RedirectResponse
 from authlib.integrations.starlette_client import OAuth
 from datetime import datetime, timedelta
@@ -13,9 +13,14 @@ from db_utils.database import get_connection
 from queries.user_queries.user_queries import UserQueries
 from queries.authorization.authorization_queries import AuthorizationQueries
 from psycopg2 import Error
-from models.user_model import UserModel
 from models.authorization_model import IssuedTokens
 from passlib.context import CryptContext
+from db_utils.database import session, engine, get_db
+from sqlalchemy.orm import Session
+import models.database_models as database_models
+from sqlalchemy.exc import SQLAlchemyError
+
+database_models.Base.metadata.create_all(bind=engine)
 
 load_dotenv(override=True)
 
@@ -74,80 +79,59 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 @router.get("/signup")
-async def signup(email: str, password: str, user_name: str):
+async def signup(email: str, password: str, user_name: str, db: Session = Depends(get_db)):
     try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute(UserQueries.create_user_table)
-
-        cur.execute(UserQueries.count_user, (email,))
-        existing = cur.fetchone()
-        if existing and existing["count"] > 0:
+        existing_user = db.query(database_models.User).filter(database_models.User.user_email == email).first()
+        
+        if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered.")
         
+        existing_user_for_user_name = db.query(database_models.User).filter(database_models.User.user_name == user_name).first()
 
-        cur.execute(UserQueries.find_user_with_user_name, (user_name.lower(),))
-        existing_with_user_name = cur.fetchone()
-        if existing_with_user_name and existing_with_user_name["count"] > 0:
+        if existing_user_for_user_name:
             raise HTTPException(status_code=400, detail="User name already registered.")
 
         hashed_pw = hash_password(password)
         
-        user_model = UserModel(
-            google_id=None,
+        user = database_models.User(
             user_email=email.strip().lower(),
             user_name=user_name.strip().lower(),
-            user_pic=None,
             hashed_password=hashed_pw,
             auth_provider="email",
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
 
-        cur.execute(UserQueries.insert_user, (
-            user_model.google_id,
-            user_model.user_email,
-            user_model.user_name,
-            user_model.user_pic,
-            user_model.hashed_password,
-            user_model.auth_provider,
-            user_model.created_at,
-            user_model.updated_at
-        ))
+        db.add(user)
+        db.commit()
 
-        conn.commit()
-
-        JSONResponse(content={"message": "User registered successfully."})
+        return JSONResponse(content={
+            "user_email": user.user_email,
+            "user_name": user.user_name,
+            "auth_provider": user.auth_provider,
+            "created_at": user.created_at.isoformat(),
+            "updated_at": user.updated_at.isoformat()
+        })
     except Error as e:
         raise HTTPException(status_code=500, detail="Database error")
-    finally:
-        cur.close()
-        conn.close()
 
 @router.get("/signin")
-async def signin(email: str, password: str):
+async def signin(email: str, password: str, db: Session = Depends(get_db)):
     try:
-        conn = get_connection()
-        cur = conn.cursor()
+        existing_user = db.query(database_models.User).filter(database_models.User.user_email == email).first()
 
-        cur.execute(UserQueries.fetch_user_for_signin, (email.strip().lower(),))
-        existing = cur.fetchone()
-
-        if existing and existing['user_emailq']:
-            user_data = dict(existing)
-            user = UserModel(**user_data)
-            is_correct_password = verify_password(password, user.hashed_password)
+        if existing_user:
+            is_correct_password = verify_password(password, existing_user.hashed_password)
 
             if is_correct_password:
                 return JSONResponse(content={
-                    "google_id": user.google_id,
-                    "user_email": user.user_email,
-                    "user_name": user.user_name,
-                    "user_pic": user.user_pic ,
-                    "auth_provider": user.auth_provider,
-                    "created_at": user.created_at.isoformat(),
-                    "updated_at": user.updated_at.isoformat()
+                    "google_id": existing_user.google_id,
+                    "user_email": existing_user.user_email,
+                    "user_name": existing_user.user_name,
+                    "user_pic": existing_user.user_pic ,
+                    "auth_provider": existing_user.auth_provider,
+                    "created_at": existing_user.created_at.isoformat(),
+                    "updated_at": existing_user.updated_at.isoformat()
                 })
             else:
                 return HTTPException(status_code=401, detail="Invalid password")
@@ -163,10 +147,8 @@ async def logout(request: Request):
     response.delete_cookie("token")
     return response
 
-@router.route("/auth")
-async def auth(request: Request):
-    state_in_request = request.query_params.get("state")
-
+@router.get("/auth")
+async def auth(request: Request, db: Session = Depends(get_db)):
     try:
         token = await oauth.auth_demo.authorize_access_token(request)
     except Exception as e:
@@ -202,31 +184,32 @@ async def auth(request: Request):
     if user_id is None:
         raise HTTPException(status_code=401, detail="Google authentication failed.")
 
-    # Create JWT token
     access_token_expires = timedelta(seconds=expires_in)
     access_token = create_access_token(data={"sub": user_id, "email": user_email}, expires_delta=access_token_expires)
 
-    session_id = str(uuid.uuid4())
-    is_new_user = log_user(UserModel(
-        google_id=user_id,
-        user_email=user_email.strip().lower(),
-        user_name=user_name.strip().lower(),
-        user_pic=user_pic,
-        auth_provider="google",
-        hashed_pw=None,
-        created_at=created_at,
-        updated_at=updated_at,
-    ))
+    session_id = str(uuid.uuid4())    
+    is_new_user = log_user(db=db, **{
+        "google_id": user_id,
+        "user_email": user_email.strip().lower(),
+        "user_name": user_name.strip().lower(),
+        "user_pic": user_pic,
+        "auth_provider": "google",
+        "hashed_password": None,
+        "created_at": created_at,
+        'updated_at': updated_at
+    })
     if is_new_user:
         logger.info(f"New user signed up: {user_email}")
     else:
         logger.info(f"Existing user signed in: {user_email}")
 
-    log_token(IssuedTokens(
-        access_token=access_token,
-        user_email=user_email,
-        session_id=session_id
-    ))
+    log_token(db=db, **{
+        "access_token": access_token,
+        "user_email": user_email.strip().lower(),
+        "session_id": session_id,
+        "created_at": created_at,
+        'updated_at': updated_at
+    })
 
     redirect_url = request.session.pop("login_redirect", FRONTEND_URL)
     logger.info(f"Redirecting to: {redirect_url}")
@@ -241,67 +224,93 @@ async def auth(request: Request):
 
     return response
 
-def log_user(user: UserModel):
+def log_user(db: Session, **kwargs):
     try:
-        conn = get_connection()
-        if conn.closed == 0:
-            cur = conn.cursor()
+        existing_user = (
+            db.query(database_models.User)
+            .filter(database_models.User.user_email == kwargs["user_email"])
+            .first()
+        )
 
-            cur.execute(UserQueries.create_user_table)
+        if existing_user:
+            existing_user.updated_at = datetime.now()
+            db.commit()
+            return False
+        
+        new_user = database_models.User(
+            google_id=kwargs["google_id"],
+            user_email=kwargs["user_email"],
+            user_name=kwargs["user_name"],  
+            user_pic=kwargs["user_pic"],
+            hashed_password=kwargs["hashed_password"],
+            auth_provider=kwargs["auth_provider"] or "email",
+            created_at=kwargs["created_at"],
+            updated_at=kwargs["updated_at"]
+        )
 
-            cur.execute(UserQueries.count_user, (user.user_email,))
-            row = cur.fetchone()
-
-            if row and row['count'] > 0:
-                cur.execute(
-                    UserQueries.update_updated_at_column,
-                    (user.updated_at, user.user_email)
-                )
-                conn.commit()
-                return False 
-            else:
-                cur.execute(
-                    UserQueries.insert_user,
-                    (user.user_id, user.google_id, user.user_email, user.user_name,
-                     user.user_pic,  user.hashed_password, user.auth_provider, user.created_at, user.updated_at)
-                )
-                conn.commit()
-                return True
-    except Error as e:
-        logger.error(f"Database operation failed: {e}")
-        raise HTTPException(status_code=500, detail="Database operation failed")    
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return True
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        if conn.closed == 0:
-            cur.close()
-            conn.close()
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
-def log_token(issued_token: IssuedTokens):
+def log_token(db: Session, **kwargs):
     try:
-        conn = get_connection()
+        existing_token = (
+            db.query(database_models.IssuedToken)
+            .filter(database_models.IssuedToken.user_email == kwargs["user_email"])
+            .first()
+        )
+        if existing_token:
+            existing_token.access_token = kwargs["access_token"]
+            existing_token.session_id = kwargs["session_id"]
+            existing_token.updated_at = datetime.now()
+            db.commit()
+            return
+        
+        new_issued_token = database_models.IssuedToken(
+            access_token=kwargs["access_token"],
+            user_email=kwargs["user_email"],
+            session_id=kwargs["session_id"],
+            created_at=kwargs["created_at"],
+            updated_at=kwargs["updated_at"]
+        )
 
-        if conn.closed == 0:
-            cur = conn.cursor()
-
-            cur.execute(AuthorizationQueries.create_issued_token_tabel)
-
-            cur.execute(AuthorizationQueries.insert_in_issued_token_tabel, (issued_token.access_token, issued_token.user_email, issued_token.session_id))
-
-            conn.commit()
-
-    except Error as e:
-        logger.error(f"Database operation failed: {e}")
-        raise HTTPException(status_code=500, detail="Database operation failed")    
+        db.add(new_issued_token)
+        db.commit()
+        db.refresh(new_issued_token)
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        if conn.closed == 0:
-            cur.close()
-            conn.close()
-            logger.info("Postgres connection is closed")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+        # conn = get_connection()
+
+        # if conn.closed == 0:
+        #     cur = conn.cursor()
+
+        #     cur.execute(AuthorizationQueries.create_issued_token_tabel)
+
+        #     cur.execute(AuthorizationQueries.insert_in_issued_token_tabel, (issued_token.access_token, issued_token.user_email, issued_token.session_id))
+
+        #     conn.commit()
+
+    # except Error as e:
+    #     logger.error(f"Database operation failed: {e}")
+    #     raise HTTPException(status_code=500, detail="Database operation failed")    
+    # except Exception as e:
+    #     logger.error(f"Unexpected error: {e}")
+    #     raise HTTPException(status_code=500, detail="Internal Server Error")
+    # finally:
+    #     if conn.closed == 0:
+    #         cur.close()
+    #         conn.close()
+    #         logger.info("Postgres connection is closed")
 
 def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
