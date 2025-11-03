@@ -17,10 +17,10 @@ from models.authorization_model import IssuedTokens
 from passlib.context import CryptContext
 from db_utils.database import session, engine, get_db
 from sqlalchemy.orm import Session
-import models.database_models as database_models
+import db_utils.db_tabel_models as db_tabel_models
 from sqlalchemy.exc import SQLAlchemyError
 
-database_models.Base.metadata.create_all(bind=engine)
+db_tabel_models.Base.metadata.create_all(bind=engine)
 
 load_dotenv(override=True)
 
@@ -81,19 +81,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 @router.get("/signup")
 async def signup(email: str, password: str, user_name: str, db: Session = Depends(get_db)):
     try:
-        existing_user = db.query(database_models.User).filter(database_models.User.user_email == email).first()
+        existing_user = db.query(db_tabel_models.User).filter(db_tabel_models.User.user_email == email).first()
         
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered.")
         
-        existing_user_for_user_name = db.query(database_models.User).filter(database_models.User.user_name == user_name).first()
+        existing_user_for_user_name = db.query(db_tabel_models.User).filter(db_tabel_models.User.user_name == user_name).first()
 
         if existing_user_for_user_name:
             raise HTTPException(status_code=400, detail="User name already registered.")
 
         hashed_pw = hash_password(password)
         
-        user = database_models.User(
+        user = db_tabel_models.User(
             user_email=email.strip().lower(),
             user_name=user_name.strip().lower(),
             hashed_password=hashed_pw,
@@ -118,7 +118,7 @@ async def signup(email: str, password: str, user_name: str, db: Session = Depend
 @router.get("/signin")
 async def signin(email: str, password: str, db: Session = Depends(get_db)):
     try:
-        existing_user = db.query(database_models.User).filter(database_models.User.user_email == email).first()
+        existing_user = db.query(db_tabel_models.User).filter(db_tabel_models.User.user_email == email).first()
 
         if existing_user:
             is_correct_password = verify_password(password, existing_user.hashed_password)
@@ -227,8 +227,8 @@ async def auth(request: Request, db: Session = Depends(get_db)):
 def log_user(db: Session, **kwargs):
     try:
         existing_user = (
-            db.query(database_models.User)
-            .filter(database_models.User.user_email == kwargs["user_email"])
+            db.query(db_tabel_models.User)
+            .filter(db_tabel_models.User.user_email == kwargs["user_email"])
             .first()
         )
 
@@ -237,13 +237,14 @@ def log_user(db: Session, **kwargs):
             db.commit()
             return False
         
-        new_user = database_models.User(
+        new_user = db_tabel_models.User(
             google_id=kwargs["google_id"],
             user_email=kwargs["user_email"],
             user_name=kwargs["user_name"],  
             user_pic=kwargs["user_pic"],
             hashed_password=kwargs["hashed_password"],
             auth_provider=kwargs["auth_provider"] or "email",
+            role = db_tabel_models.UserRole.ATTENDEE,
             created_at=kwargs["created_at"],
             updated_at=kwargs["updated_at"]
         )
@@ -261,8 +262,8 @@ def log_user(db: Session, **kwargs):
 def log_token(db: Session, **kwargs):
     try:
         existing_token = (
-            db.query(database_models.IssuedToken)
-            .filter(database_models.IssuedToken.user_email == kwargs["user_email"])
+            db.query(db_tabel_models.IssuedToken)
+            .filter(db_tabel_models.IssuedToken.user_email == kwargs["user_email"])
             .first()
         )
         if existing_token:
@@ -272,7 +273,7 @@ def log_token(db: Session, **kwargs):
             db.commit()
             return
         
-        new_issued_token = database_models.IssuedToken(
+        new_issued_token = db_tabel_models.IssuedToken(
             access_token=kwargs["access_token"],
             user_email=kwargs["user_email"],
             session_id=kwargs["session_id"],
