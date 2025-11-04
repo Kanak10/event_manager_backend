@@ -69,9 +69,18 @@ class Address(Base):
 class Event(Base):
     __tablename__ = "events"
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    name = Column(String(255), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    event_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    founder_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    genre = Column(String(225), nullable=False)
+    lat = Column(String(225), nullable=False)
+    log = Column(String(225), nullable=False)
+    start_date = Column(TIMESTAMP, nullable=True)
+    end_date = Column(TIMESTAMP, nullable=True)
+    price = Column(Integer, nullable=True, default=0)
+    description = Column(String(225), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     # Relationship back to User
     user = relationship("User", back_populates="events")
