@@ -1,42 +1,30 @@
-import os
-from fastapi import FastAPI, Header, HTTPException, Depends, Request
+from fastapi import FastAPI, Request
 from starlette.config import Config
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from apis import chatbot, authentication
-import logging as logger
+from apis import authentication, chatbot, user
 import time
-
+import logging as logger
 
 from dotenv import load_dotenv
-load_dotenv(override=True)
 
-config = Config(".env")
+load_dotenv(override=True) # It loads environment variables from your .env file into Python, and override=True makes these values replace any existing system environment variables.
 
-
-expected_api_secret = os.getenv("FASTAPI_SECRET_KEY")
+config = Config(".env") # This line creates a Starlette Config object that reads the .env file, allowing you to access environment variables in a structured way, e.g., config("VAR_NAME").
 
 app = FastAPI()
 
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or specify allowed origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
-)
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=config("SECRET_KEY"),
-    same_site="lax",           # or "none" if frontend/backend are on different domains
-    https_only=False
-)
+    allow_origins=["*"], # Allow requests from any domain.
+    allow_credentials=True, # Allow sending cookies, auth headers, etc.
+    allow_methods=["*"], # Allow all HTTP methods (GET, POST, etc.).
+    allow_headers=["*"], # Allow all request headers.
+    expose_headers=["*"] # Allow all response headers to be visible to the client.
+) # Enables cross-origin requests so your frontend can access the API safely.
 
 # Add Session middleware
-# app.add_middleware(SessionMiddleware, secret_key=config("SECRET_KEY"))
+app.add_middleware(SessionMiddleware, secret_key=config("SECRET_KEY")) # Enables storing and securing per-user session data (like login info) in your app.
 
 # # Logging time taken for each api request
 @app.middleware("http")
@@ -44,87 +32,16 @@ async def log_response_time(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
+    print(f"response: {response}")
+    print(f"process_time: {process_time}")
     logger.info(f"Request: {request.url.path} completed in {process_time:.4f} seconds")
-    return response 
+    return response
 
-app.include_router(chatbot.router, tags=["Chatbot"])
 app.include_router(authentication.router, tags=["Authentication"])
+app.include_router(user.router, tags=["User"])
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# from fastapi import FastAPI
-# from starlette.middleware.sessions import SessionMiddleware
-# from starlette.config import Config
-# from authlib.integrations.starlette_client import OAuth
-# from starlette.requests import Request
-# import logging
-
-# app = FastAPI()
-
-# config = Config('.env')
-
-# app.add_middleware(SessionMiddleware, secret_key=config('SECRET_KEY'))
-
-# oauth = OAuth()
-
-# google = oauth.register(
-#     name='google',
-#     client_id=config("GOOGLE_CLIENT_ID"),
-#     client_secret=config("GOOGLE_CLIENT_SECRET"),
-#     access_token_url=config("GOOGLE_ACCESS_TOKEN_URL"),
-#     authorize_url=config("GOOGLE_AUTHORIZE_URL"),
-#     api_base_url=config("GOOGLE_API_BASE_URL"),
-#     userinfo_endpoint=config("GOOGLE_USERINFO_ENDPOINT"),
-#     jwks_uri="https://www.googleapis.com/oauth2/v3/certs",
-#     client_kwargs={'scope': 'openid email profile'}
-# )
-
-# @app.get("/login/{provider}")
-# async def login(request: Request, provider: str):
-#     if provider not in ['google', 'linkedin']:
-#         return {"error": "Unsupport provider"}
-    
-#     oauth_provider = oauth.create_client(provider)
-
-#     redirect_uri = config("REDIRECT_URI")
-#     logging.debug(f"Redirect URI: {redirect_uri}")
-
-#     print(f"redirect_uri:: {redirect_uri}")
-#     print(f"request:: {request}")
-#     return await oauth_provider.authorize_redirect(request, redirect_uri)
-
-# @app.get("/auth/callback/{provider}")
-# async def auth_callback(request: Request, provider: str):
-#     # try:
-#     print(f"provider:: {provider}")
-#     print(f"request:: {request}")
-#     if provider not in ['google', 'linkedin']:
-#         return {"error": "Unsupport provider"}
-    
-#     oauth_provider = oauth.create_client(provider)
-#     token = await oauth_provider.authorize_access_token(request)
-#     user_info = (await oauth_provider.get("userinfo")).json()
-
-#     # Store user in loacl store
-#     print(f"token:: {token}")
-#     print(f"oauth_provider:: {oauth_provider}")
-#     print(f"user_info:: {user_info}")
-#     return {"message": "User authentication successfully", "user_info": user_info}
-
-#     # except Exception as e:
-#     #     print(e)
+if __name__ == "__main__":
+    import uvicorn
+    import nest_asyncio
+    nest_asyncio.apply()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
