@@ -14,7 +14,7 @@ It manages core operations such as user authentication, event handling, and chat
 ### **1. Clone the Repository**
    
    ```
-   git clone <your-repository-url>
+   git clone git@github.com:Kanak10/event_manager_backend.git
    cd event-management-backend
    ```
 ### **2. Install Dependencies**
@@ -61,3 +61,4 @@ Or, if needed:
    ```
    python -m alembic upgrade head
    ```
+
