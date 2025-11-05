@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from db_utils.database import get_db
 from datetime import datetime
 import db_utils.db_tabel_models as db_tabel_models
-from models.user_model import UserModel
+from models.user_model import UserRead, UserRegistration
 from psycopg2 import Error
 
 router = APIRouter()
@@ -17,7 +17,7 @@ async def get_users(db: Session = Depends(get_db)):
         if not users:
             raise HTTPException(status_code=401, detail="User is not available")
 
-        return [UserModel.model_validate(user, from_attributes=True) for user in users]
+        return [UserRead.model_validate(user, from_attributes=True) for user in users]
             
     except Error as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
@@ -27,7 +27,7 @@ async def register_user(request: Request, db: Session = Depends(get_db)):
     try:
         body = await request.json()
         print("RAW REQUEST BODY:", body)
-        user_data = UserModel(**body)
+        user_data = UserRegistration(**body)
         print("Parsed user_data:", user_data)
         
         user = db.query(db_tabel_models.User).filter(db_tabel_models.User.user_id == user_data.user_id).first()

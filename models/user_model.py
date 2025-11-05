@@ -1,25 +1,38 @@
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, EmailStr
 from datetime import datetime
-from typing import Optional
-# from adress_model import AddressModel
-# from event import Event
+from typing import Optional, List
+from adress_model import AddressModel
+from event import Event
 
-class UserModel(BaseModel):
-    user_id: Optional[int] = None
-    google_id: Optional[str] = None
-    user_email: Optional[str] = None
+class UserBase(BaseModel):
     user_name: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     user_pic: Optional[str] = None
-    auth_provider: Optional[str] = None
-    hashed_password: Optional[str] = None
-    # address: AddressModel | None
-    # events: List[Event] | None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
+class UserCreate(UserBase):
+    email: EmailStr
+    password: str
+
+class UserRegistration(UserBase):
+    user_id: str
+    email: EmailStr
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserUpdate(UserBase):
+    first_name: Optional[str]
+    last_name: Optional[str]
+
+class UserRead(UserBase):
+    user_id: int
+    user_email: EmailStr
+    address: Optional[AddressModel] = None
+    events: Optional[List[Event]] = None
+    created_at: datetime
+    updated_at: Optional[datetime]
 
     class Config:
-        from_attributes = True
+        from_attributes = True # lets Pydantic read from object attributes (like SQLAlchemy models) instead of only from plain dicts.

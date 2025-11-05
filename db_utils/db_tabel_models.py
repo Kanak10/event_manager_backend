@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String, Text, ForeignKey, Table, TIMESTAMP, func, Enum as SQLEnum
+    Column, Integer, String, Text, ForeignKey, Table, TIMESTAMP, func, Enum as SQLEnum, Float
 )
 from sqlalchemy.orm import relationship, declarative_base
 from enum import Enum
@@ -32,8 +32,8 @@ class User(Base):
     hashed_password = Column(Text, nullable=True)
     auth_provider = Column(String(50), nullable=False, default="email")
     role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.ATTENDEE)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
     address = relationship("Address", back_populates="user", uselist=False)
@@ -48,23 +48,27 @@ class IssuedToken(Base):
     access_token = Column(String(512), nullable=False)
     user_email = Column(String(255), nullable=False)
     session_id = Column(String(255), nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
 
 class Address(Base):
-    __tablename__ = "address"
+    __tablename__ = "addresses"
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    address_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     street = Column(String(255), nullable=False)
     city = Column(String(100), nullable=False)
     state = Column(String(100), nullable=False)
     country = Column(String(100), nullable=False)
     pincode = Column(Integer, nullable=False)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationship back to User
     user = relationship("User", back_populates="address")
-
 
 class Event(Base):
     __tablename__ = "events"
@@ -73,14 +77,14 @@ class Event(Base):
     title = Column(String(255), nullable=False)
     founder_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     genre = Column(String(225), nullable=False)
-    lat = Column(String(225), nullable=False)
-    log = Column(String(225), nullable=False)
-    start_date = Column(TIMESTAMP, nullable=True)
-    end_date = Column(TIMESTAMP, nullable=True)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    start_date = Column(TIMESTAMP(timezone=True), nullable=True)
+    end_date = Column(TIMESTAMP(timezone=True), nullable=True)
     price = Column(Integer, nullable=True, default=0)
     description = Column(String(225), nullable=True)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationship back to User
     user = relationship("User", back_populates="events")
@@ -90,8 +94,8 @@ class Hobby(Base):
 
     hobby_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String(100), nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationship back to User
     users = relationship("User", secondary=user_hobby_association, back_populates="hobbies")
