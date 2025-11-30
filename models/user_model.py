@@ -1,8 +1,8 @@
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from typing import Optional, List
-from adress_model import AddressModel
-from event import Event
+from models.address_model import AddressRead
+from models.event import EventRead
 
 class UserBase(BaseModel):
     user_name: Optional[str] = None
@@ -29,8 +29,8 @@ class UserUpdate(UserBase):
 class UserRead(UserBase):
     user_id: int
     user_email: EmailStr
-    address: Optional[AddressModel] = None
-    events: Optional[List[Event]] = None
+    address: Optional[AddressRead] = None
+    events: Optional[List[EventRead]] = None
     created_at: datetime
     updated_at: Optional[datetime]
 
